@@ -21,7 +21,13 @@ const typeClass: Record<Item['type'], string> = {
   drama: 'bg-type-drama text-type-drama-ink',
 }
 
-export default function ItemCard({ item }: { item: Item }) {
+export default function ItemCard({
+  item,
+  onUpdated,
+}: {
+  item: Item
+  onUpdated: () => void
+}) {
   const [open, setOpen] = useState(false)
 
   return (
@@ -34,7 +40,9 @@ export default function ItemCard({ item }: { item: Item }) {
           {item.thumbnail_url ? (
             <Image src={item.thumbnail_url} alt={item.title} fill className="object-cover" />
           ) : (
-            <div className="flex h-full items-center justify-center text-xs text-ink/30">画像なし</div>
+            <div className="flex h-full items-center justify-center text-xs text-ink/30">
+              画像なし
+            </div>
           )}
           <span
             className={`absolute left-1.5 top-1.5 rounded-full px-2 py-0.5 text-[10px] font-medium ${typeClass[item.type]}`}
@@ -44,11 +52,22 @@ export default function ItemCard({ item }: { item: Item }) {
         </div>
         <div className="p-2">
           <p className="line-clamp-2 text-sm leading-snug">{item.title}</p>
-          {item.creator && <p className="mt-0.5 line-clamp-1 text-xs text-ink/50">{item.creator}</p>}
+          {item.creator && (
+            <p className="mt-0.5 line-clamp-1 text-xs text-ink/50">{item.creator}</p>
+          )}
         </div>
       </button>
 
-      {open && <ItemDetailModal item={item} onClose={() => setOpen(false)} />}
+      {open && (
+        <ItemDetailModal
+          item={item}
+          onClose={() => setOpen(false)}
+          onUpdated={() => {
+            setOpen(false)
+            onUpdated()
+          }}
+        />
+      )}
     </>
   )
 }

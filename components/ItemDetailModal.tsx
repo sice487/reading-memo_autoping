@@ -1,7 +1,6 @@
 'use client'
 
 import { useState } from 'react'
-import { useRouter } from 'next/navigation'
 import { supabaseBrowser } from '@/lib/supabase-browser'
 import type { Item, ItemType } from '@/types/item'
 
@@ -23,12 +22,19 @@ function todayString() {
   return new Date(now.getTime() - offsetMs).toISOString().slice(0, 10)
 }
 
-export default function ItemDetailModal({ item, onClose }: { item: Item; onClose: () => void }) {
+export default function ItemDetailModal({
+  item,
+  onClose,
+  onUpdated,
+}: {
+  item: Item
+  onClose: () => void
+  onUpdated: () => void
+}) {
   const [isPending, setIsPending] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [completedDate, setCompletedDate] = useState(todayString())
-  const router = useRouter()
 
   async function handleSave(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
@@ -63,8 +69,7 @@ export default function ItemDetailModal({ item, onClose }: { item: Item; onClose
       return
     }
 
-    onClose()
-    router.refresh()
+    onUpdated()
   }
 
   async function handleDelete() {
@@ -80,8 +85,7 @@ export default function ItemDetailModal({ item, onClose }: { item: Item; onClose
       return
     }
 
-    onClose()
-    router.refresh()
+    onUpdated()
   }
 
   async function handleComplete() {
@@ -115,8 +119,7 @@ export default function ItemDetailModal({ item, onClose }: { item: Item; onClose
       return
     }
 
-    onClose()
-    router.refresh()
+    onUpdated()
   }
 
   return (
@@ -206,7 +209,9 @@ export default function ItemDetailModal({ item, onClose }: { item: Item; onClose
                 完了にする
               </button>
             </div>
-            <p className="mt-1 text-xs text-ink/40">評価・感想・タグは次のPhaseで追加できるようになります</p>
+            <p className="mt-1 text-xs text-ink/40">
+              評価・感想・タグは次のPhaseで追加できるようになります
+            </p>
           </div>
         )}
 

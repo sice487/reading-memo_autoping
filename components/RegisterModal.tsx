@@ -1,7 +1,6 @@
 'use client'
 
 import { useRef, useState } from 'react'
-import { useRouter } from 'next/navigation'
 import { supabaseBrowser } from '@/lib/supabase-browser'
 import type { ItemStatus, ItemType } from '@/types/item'
 
@@ -17,12 +16,17 @@ const inputClass =
   'w-full rounded-lg border border-ink/15 bg-white px-3 py-2 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40'
 const labelClass = 'mb-1 block text-xs text-ink/50'
 
-export default function RegisterModal({ defaultStatus }: { defaultStatus: ItemStatus }) {
+export default function RegisterModal({
+  status,
+  onSaved,
+}: {
+  status: ItemStatus
+  onSaved: () => void
+}) {
   const [open, setOpen] = useState(false)
   const [isPending, setIsPending] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const formRef = useRef<HTMLFormElement>(null)
-  const router = useRouter()
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
@@ -57,7 +61,7 @@ export default function RegisterModal({ defaultStatus }: { defaultStatus: ItemSt
 
     formRef.current?.reset()
     setOpen(false)
-    router.refresh()
+    onSaved()
   }
 
   return (
@@ -95,7 +99,7 @@ export default function RegisterModal({ defaultStatus }: { defaultStatus: ItemSt
 
               <div>
                 <label className={labelClass}>登録先</label>
-                <select name="status" required className={inputClass} defaultValue={defaultStatus}>
+                <select name="status" required className={inputClass} defaultValue={status}>
                   <option value="wishlist">未読・未視聴(ウィッシュリスト)</option>
                   <option value="completed">記録済み(読了・視聴済み)</option>
                 </select>
