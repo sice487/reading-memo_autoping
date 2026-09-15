@@ -24,37 +24,56 @@ function todayString() {
   return new Date(now.getTime() - offsetMs).toISOString().slice(0, 10)
 }
 
-// タグ名のリストをDBに保存してrecord_tagsを更新する共通関数
 async function syncTags(recordId: string, tagNames: string[]) {
+  // 既存のrecord_tagsを先に削除
+  const { error: deleteError } = await supabaseBrowser
+    .from('record_tags')
+    .delete()
+    .eq('record_id', recordId)
+
+  if (deleteError) {
+    console.error('record_tags削除エラー:', deleteError)
+    return
+  }
+
+  if (tagNames.length === 0) return
+
   const tagIds: string[] = []
 
   for (const name of tagNames) {
-    // maybeSingle()を使用: データなし=null、エラー時のみthrow
+    // 既存タグを検索
     const { data: existing } = await supabaseBrowser
       .from('tags')
       .select('id')
       .eq('name', name)
       .maybeSingle()
 
-    if (existing) {
+    if (existing?.id) {
       tagIds.push(existing.id)
     } else {
-      const { data: created } = await supabaseBrowser
+      // 新規タグを作成
+      const { data: created, error: createError } = await supabaseBrowser
         .from('tags')
         .insert({ name })
         .select('id')
         .maybeSingle()
-      if (created) tagIds.push(created.id)
+
+      if (createError) {
+        console.error('タグ作成エラー:', createError)
+        continue
+      }
+      if (created?.id) tagIds.push(created.id)
     }
   }
 
-  // 既存のrecord_tagsを削除して付け直す
-  await supabaseBrowser.from('record_tags').delete().eq('record_id', recordId)
-
   if (tagIds.length > 0) {
-    await supabaseBrowser.from('record_tags').insert(
-      tagIds.map((tag_id) => ({ record_id: recordId, tag_id }))
-    )
+    const { error: insertError } = await supabaseBrowser
+      .from('record_tags')
+      .insert(tagIds.map((tag_id) => ({ record_id: recordId, tag_id })))
+
+    if (insertError) {
+      console.error('record_tags挿入エラー:', insertError)
+    }
   }
 }
 
@@ -72,16 +91,16 @@ export default function ItemDetailModal({
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [allTagSuggestions, setAllTagSuggestions] = useState<string[]>([])
 
-  // 既存レコード
   const record = item.records?.[0] ?? null
 
-  // ウィッシュリスト→完了にする用フォーム
-  const [completedDate, setCompletedDate] = useState(todayString())
-  const [rating, setRating] = useState<number | null>(null)
-  const [review, setReview] = useState('')
-  const [tags, setTags] = useState<string[]>([])
+  // アイテム情報
+  const [type, setType] = useState<ItemType>(item.type)
+  const [title, setTitle] = useState(item.title)
+  const [creator, setCreator] = useState(item.creator ?? '')
+  const [publisher, setPublisher] = useState(item.publisher ?? '')
+  const [thumbnailUrl, setThumbnailUrl] = useState(item.thumbnail_url ?? '')
 
-  // 完了済みアイテムのレコード編集/新規作成用フォーム
+  // 記録情報(completed共通)
   const [editCompletedDate, setEditCompletedDate] = useState(
     record?.completed_date ?? todayString()
   )
@@ -91,7 +110,12 @@ export default function ItemDetailModal({
     record?.record_tags.map((rt) => rt.tags.name) ?? []
   )
 
-  // タグ候補を取得
+  // ウィッシュリスト→完了にする用
+  const [completedDate, setCompletedDate] = useState(todayString())
+  const [rating, setRating] = useState<number | null>(null)
+  const [review, setReview] = useState('')
+  const [tags, setTags] = useState<string[]>([])
+
   useEffect(() => {
     supabaseBrowser
       .from('tags')
@@ -100,38 +124,80 @@ export default function ItemDetailModal({
       .then(({ data }) => setAllTagSuggestions(data?.map((t) => t.name) ?? []))
   }, [])
 
-  // アイテム情報の編集
+  // アイテム情報 + 記録情報を一括保存(completed用)
   async function handleSave(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
+    if (!title.trim()) {
+      setErrorMessage('タイトルを入力してください')
+      return
+    }
     setErrorMessage(null)
     setIsPending(true)
 
-    const formData = new FormData(e.currentTarget)
-    const title = (formData.get('title') as string)?.trim()
-
-    if (!title) {
-      setErrorMessage('タイトルを入力してください')
-      setIsPending(false)
-      return
-    }
-
-    const { error } = await supabaseBrowser
+    // アイテム情報を更新
+    const { error: itemError } = await supabaseBrowser
       .from('items')
       .update({
-        type: formData.get('type') as ItemType,
-        title,
-        creator: (formData.get('creator') as string)?.trim() || null,
-        publisher: (formData.get('publisher') as string)?.trim() || null,
-        thumbnail_url: (formData.get('thumbnail_url') as string)?.trim() || null,
+        type,
+        title: title.trim(),
+        creator: creator.trim() || null,
+        publisher: publisher.trim() || null,
+        thumbnail_url: thumbnailUrl.trim() || null,
         updated_at: new Date().toISOString(),
       })
       .eq('id', item.id)
 
-    setIsPending(false)
-    if (error) {
-      setErrorMessage(`更新できませんでした: ${error.message}`)
+    if (itemError) {
+      setErrorMessage(`更新できませんでした: ${itemError.message}`)
+      setIsPending(false)
       return
     }
+
+    // 記録を更新 or 新規作成
+    let recordId = record?.id ?? null
+
+    if (recordId) {
+      // 既存レコードを更新
+      const { error: recError } = await supabaseBrowser
+        .from('records')
+        .update({
+          completed_date: editCompletedDate,
+          rating: editRating,
+          review: editReview.trim() || null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', recordId)
+
+      if (recError) {
+        setErrorMessage(`記録の更新に失敗しました: ${recError.message}`)
+        setIsPending(false)
+        return
+      }
+    } else {
+      // レコードがない場合は新規作成
+      const { data: newRecord, error: recError } = await supabaseBrowser
+        .from('records')
+        .insert({
+          item_id: item.id,
+          completed_date: editCompletedDate,
+          rating: editRating,
+          review: editReview.trim() || null,
+        })
+        .select('id')
+        .maybeSingle()
+
+      if (recError || !newRecord) {
+        setErrorMessage(`記録の作成に失敗しました: ${recError?.message}`)
+        setIsPending(false)
+        return
+      }
+      recordId = newRecord.id
+    }
+
+    // タグを同期
+    await syncTags(recordId, editTags)
+
+    setIsPending(false)
     onUpdated()
   }
 
@@ -176,63 +242,10 @@ export default function ItemDetailModal({
     onUpdated()
   }
 
-  // 完了済みのレコードを編集 or 新規作成
-  async function handleSaveRecord() {
-    setErrorMessage(null)
-    setIsPending(true)
-
-    if (record) {
-      // 既存レコードを更新
-      const { error } = await supabaseBrowser
-        .from('records')
-        .update({
-          completed_date: editCompletedDate,
-          rating: editRating,
-          review: editReview.trim() || null,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', record.id)
-
-      if (error) {
-        setErrorMessage(`記録の更新に失敗しました: ${error.message}`)
-        setIsPending(false)
-        return
-      }
-
-      await syncTags(record.id, editTags)
-    } else {
-      // recordsが存在しない場合(RegisterModalでcompletedに直接登録した場合)は新規作成
-      const { data: newRecord, error: recordError } = await supabaseBrowser
-        .from('records')
-        .insert({
-          item_id: item.id,
-          completed_date: editCompletedDate,
-          rating: editRating,
-          review: editReview.trim() || null,
-        })
-        .select('id')
-        .maybeSingle()
-
-      if (recordError || !newRecord) {
-        setErrorMessage(`記録の作成に失敗しました: ${recordError?.message}`)
-        setIsPending(false)
-        return
-      }
-
-      await syncTags(newRecord.id, editTags)
-    }
-
-    setIsPending(false)
-    onUpdated()
-  }
-
-  // アイテムの削除
   async function handleDelete() {
     setErrorMessage(null)
     setIsPending(true)
-
     const { error } = await supabaseBrowser.from('items').delete().eq('id', item.id)
-
     setIsPending(false)
     if (error) {
       setErrorMessage(`削除できませんでした: ${error.message}`)
@@ -250,13 +263,20 @@ export default function ItemDetailModal({
         className="my-auto w-full max-w-md rounded-t-2xl bg-paper p-5 sm:rounded-2xl"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* アイテム情報の編集フォーム */}
         <h2 className="mb-4 font-serif text-base font-medium">編集</h2>
 
+        {/* アイテム情報 + 記録情報を1つのフォームに統合 */}
         <form onSubmit={handleSave} className="space-y-3">
+
+          {/* アイテム情報 */}
           <div>
             <label className={labelClass}>種類</label>
-            <select name="type" required className={inputClass} defaultValue={item.type}>
+            <select
+              value={type}
+              onChange={(e) => setType(e.target.value as ItemType)}
+              required
+              className={inputClass}
+            >
               {typeOptions.map((opt) => (
                 <option key={opt.value} value={opt.value}>
                   {opt.label}
@@ -267,31 +287,91 @@ export default function ItemDetailModal({
 
           <div>
             <label className={labelClass}>タイトル *</label>
-            <input name="title" required defaultValue={item.title} className={inputClass} />
+            <input
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              required
+              className={inputClass}
+            />
           </div>
 
           <div>
             <label className={labelClass}>作者 / 監督</label>
-            <input name="creator" defaultValue={item.creator ?? ''} className={inputClass} />
+            <input
+              value={creator}
+              onChange={(e) => setCreator(e.target.value)}
+              className={inputClass}
+            />
           </div>
 
           <div>
             <label className={labelClass}>出版社 / 制作会社</label>
-            <input name="publisher" defaultValue={item.publisher ?? ''} className={inputClass} />
+            <input
+              value={publisher}
+              onChange={(e) => setPublisher(e.target.value)}
+              className={inputClass}
+            />
           </div>
 
           <div>
             <label className={labelClass}>サムネイルURL</label>
             <input
-              name="thumbnail_url"
-              defaultValue={item.thumbnail_url ?? ''}
+              value={thumbnailUrl}
+              onChange={(e) => setThumbnailUrl(e.target.value)}
               placeholder="https://..."
               className={inputClass}
             />
           </div>
 
+          {/* 記録情報(completedのみ表示) */}
+          {item.status === 'completed' && (
+            <>
+              <div className="border-t border-ink/10 pt-3">
+                <p className="mb-3 font-serif text-sm font-medium">
+                  {record ? '記録' : '記録を追加'}
+                </p>
+              </div>
+
+              <div>
+                <label className={labelClass}>完了日</label>
+                <input
+                  type="date"
+                  value={editCompletedDate}
+                  onChange={(e) => setEditCompletedDate(e.target.value)}
+                  className={inputClass}
+                />
+              </div>
+
+              <div>
+                <label className={labelClass}>評価</label>
+                <StarRating value={editRating} onChange={setEditRating} />
+              </div>
+
+              <div>
+                <label className={labelClass}>感想</label>
+                <textarea
+                  value={editReview}
+                  onChange={(e) => setEditReview(e.target.value)}
+                  rows={3}
+                  placeholder="感想を入力…"
+                  className={inputClass}
+                />
+              </div>
+
+              <div>
+                <label className={labelClass}>タグ</label>
+                <TagInput
+                  tags={editTags}
+                  onChange={setEditTags}
+                  suggestions={allTagSuggestions}
+                />
+              </div>
+            </>
+          )}
+
           {errorMessage && <p className="text-xs text-red-700">{errorMessage}</p>}
 
+          {/* 保存ボタンは1つ */}
           <div className="flex gap-2 pt-2">
             <button
               type="button"
@@ -353,59 +433,6 @@ export default function ItemDetailModal({
               className="w-full rounded-lg bg-ink py-2 text-sm text-white disabled:opacity-50"
             >
               {isPending ? '保存中…' : '完了にする'}
-            </button>
-          </div>
-        )}
-
-        {/* 完了済みの記録を編集 or 新規作成 */}
-        {item.status === 'completed' && (
-          <div className="mt-5 space-y-3 border-t border-ink/10 pt-4">
-            <p className="font-serif text-sm font-medium">
-              {record ? '記録を編集' : '記録を追加'}
-            </p>
-
-            <div>
-              <label className={labelClass}>完了日</label>
-              <input
-                type="date"
-                value={editCompletedDate}
-                onChange={(e) => setEditCompletedDate(e.target.value)}
-                className={inputClass}
-              />
-            </div>
-
-            <div>
-              <label className={labelClass}>評価</label>
-              <StarRating value={editRating} onChange={setEditRating} />
-            </div>
-
-            <div>
-              <label className={labelClass}>感想</label>
-              <textarea
-                value={editReview}
-                onChange={(e) => setEditReview(e.target.value)}
-                rows={3}
-                placeholder="感想を入力…"
-                className={inputClass}
-              />
-            </div>
-
-            <div>
-              <label className={labelClass}>タグ</label>
-              <TagInput
-                tags={editTags}
-                onChange={setEditTags}
-                suggestions={allTagSuggestions}
-              />
-            </div>
-
-            <button
-              type="button"
-              onClick={handleSaveRecord}
-              disabled={isPending}
-              className="w-full rounded-lg bg-ink py-2 text-sm text-white disabled:opacity-50"
-            >
-              {isPending ? '保存中…' : record ? '記録を保存する' : '記録を追加する'}
             </button>
           </div>
         )}
