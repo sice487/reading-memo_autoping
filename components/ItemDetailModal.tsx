@@ -29,12 +29,12 @@ async function syncTags(recordId: string, tagNames: string[]) {
   const tagIds: string[] = []
 
   for (const name of tagNames) {
-    // 既存タグを取得、なければ新規作成
+    // maybeSingle()を使用: データなし=null、エラー時のみthrow
     const { data: existing } = await supabaseBrowser
       .from('tags')
       .select('id')
       .eq('name', name)
-      .single()
+      .maybeSingle()
 
     if (existing) {
       tagIds.push(existing.id)
@@ -43,7 +43,7 @@ async function syncTags(recordId: string, tagNames: string[]) {
         .from('tags')
         .insert({ name })
         .select('id')
-        .single()
+        .maybeSingle()
       if (created) tagIds.push(created.id)
     }
   }
@@ -72,7 +72,7 @@ export default function ItemDetailModal({
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [allTagSuggestions, setAllTagSuggestions] = useState<string[]>([])
 
-  // 既存レコード(完了済みアイテム用)
+  // 既存レコード
   const record = item.records?.[0] ?? null
 
   // ウィッシュリスト→完了にする用フォーム
@@ -81,8 +81,10 @@ export default function ItemDetailModal({
   const [review, setReview] = useState('')
   const [tags, setTags] = useState<string[]>([])
 
-  // 完了済みアイテムのレコード編集用フォーム
-  const [editCompletedDate, setEditCompletedDate] = useState(record?.completed_date ?? todayString())
+  // 完了済みアイテムのレコード編集/新規作成用フォーム
+  const [editCompletedDate, setEditCompletedDate] = useState(
+    record?.completed_date ?? todayString()
+  )
   const [editRating, setEditRating] = useState<number | null>(record?.rating ?? null)
   const [editReview, setEditReview] = useState(record?.review ?? '')
   const [editTags, setEditTags] = useState<string[]>(
@@ -151,7 +153,7 @@ export default function ItemDetailModal({
         review: review.trim() || null,
       })
       .select('id')
-      .single()
+      .maybeSingle()
 
     if (recordError || !newRecord) {
       setErrorMessage(`記録の作成に失敗しました: ${recordError?.message}`)
@@ -174,29 +176,51 @@ export default function ItemDetailModal({
     onUpdated()
   }
 
-  // 完了済みのレコードを編集
-  async function handleEditRecord() {
-    if (!record) return
+  // 完了済みのレコードを編集 or 新規作成
+  async function handleSaveRecord() {
     setErrorMessage(null)
     setIsPending(true)
 
-    const { error } = await supabaseBrowser
-      .from('records')
-      .update({
-        completed_date: editCompletedDate,
-        rating: editRating,
-        review: editReview.trim() || null,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', record.id)
+    if (record) {
+      // 既存レコードを更新
+      const { error } = await supabaseBrowser
+        .from('records')
+        .update({
+          completed_date: editCompletedDate,
+          rating: editRating,
+          review: editReview.trim() || null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', record.id)
 
-    if (error) {
-      setErrorMessage(`記録の更新に失敗しました: ${error.message}`)
-      setIsPending(false)
-      return
+      if (error) {
+        setErrorMessage(`記録の更新に失敗しました: ${error.message}`)
+        setIsPending(false)
+        return
+      }
+
+      await syncTags(record.id, editTags)
+    } else {
+      // recordsが存在しない場合(RegisterModalでcompletedに直接登録した場合)は新規作成
+      const { data: newRecord, error: recordError } = await supabaseBrowser
+        .from('records')
+        .insert({
+          item_id: item.id,
+          completed_date: editCompletedDate,
+          rating: editRating,
+          review: editReview.trim() || null,
+        })
+        .select('id')
+        .maybeSingle()
+
+      if (recordError || !newRecord) {
+        setErrorMessage(`記録の作成に失敗しました: ${recordError?.message}`)
+        setIsPending(false)
+        return
+      }
+
+      await syncTags(newRecord.id, editTags)
     }
-
-    await syncTags(record.id, editTags)
 
     setIsPending(false)
     onUpdated()
@@ -333,10 +357,12 @@ export default function ItemDetailModal({
           </div>
         )}
 
-        {/* 完了済みのレコード編集 */}
-        {item.status === 'completed' && record && (
+        {/* 完了済みの記録を編集 or 新規作成 */}
+        {item.status === 'completed' && (
           <div className="mt-5 space-y-3 border-t border-ink/10 pt-4">
-            <p className="font-serif text-sm font-medium">記録を編集</p>
+            <p className="font-serif text-sm font-medium">
+              {record ? '記録を編集' : '記録を追加'}
+            </p>
 
             <div>
               <label className={labelClass}>完了日</label>
@@ -375,11 +401,11 @@ export default function ItemDetailModal({
 
             <button
               type="button"
-              onClick={handleEditRecord}
+              onClick={handleSaveRecord}
               disabled={isPending}
               className="w-full rounded-lg bg-ink py-2 text-sm text-white disabled:opacity-50"
             >
-              {isPending ? '保存中…' : '記録を保存する'}
+              {isPending ? '保存中…' : record ? '記録を保存する' : '記録を追加する'}
             </button>
           </div>
         )}
