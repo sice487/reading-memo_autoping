@@ -4,7 +4,6 @@ import { useState } from 'react'
 import Image from 'next/image'
 import type { ItemWithRecord } from '@/types/item'
 import ItemDetailModal from './ItemDetailModal'
-import StarRating from './StarRating'
 
 const typeLabel: Record<ItemWithRecord['type'], string> = {
   book: '本',
@@ -30,9 +29,7 @@ export default function ItemCard({
   onUpdated: () => void
 }) {
   const [open, setOpen] = useState(false)
-
   const record = item.records?.[0] ?? null
-  const tags = record?.record_tags.map((rt) => rt.tags.name) ?? []
 
   return (
     <>
@@ -64,22 +61,8 @@ export default function ItemCard({
           {item.creator && (
             <p className="mt-0.5 line-clamp-1 text-xs text-ink/50">{item.creator}</p>
           )}
-          {tags.length > 0 && (
-            <div className="mt-1.5 flex flex-wrap gap-1">
-              {tags.slice(0, 2).map((tag) => (
-                <span
-                  key={tag}
-                  className="rounded-full bg-ink/10 px-2 py-0.5 text-[10px] text-ink/60"
-                >
-                  {tag}
-                </span>
-              ))}
-              {tags.length > 2 && (
-                <span className="rounded-full bg-ink/10 px-2 py-0.5 text-[10px] text-ink/60">
-                  +{tags.length - 2}
-                </span>
-              )}
-            </div>
+          {record?.completed_date && (
+            <p className="mt-0.5 text-xs text-ink/40">{record.completed_date}</p>
           )}
         </div>
       </button>

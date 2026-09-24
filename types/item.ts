@@ -16,20 +16,11 @@ export interface Item {
   updated_at: string
 }
 
-export interface Tag {
-  id: string
-  name: string
-}
-
-// records・tagsを含む拡張型(ItemListでの取得に使用)
 export interface ItemWithRecord extends Item {
   records: {
     id: string
     completed_date: string
     rating: number | null
     review: string | null
-    record_tags: {
-      tags: Tag
-    }[]
   }[]
 }
