@@ -1,9 +1,10 @@
 'use client'
 
-import { useRef, useState } from 'react'
+import { useRef, useState, useEffect, useCallback } from 'react'
 import { supabaseBrowser } from '@/lib/supabase-browser'
 import type { ItemStatus, ItemType } from '@/types/item'
 import StarRating from './StarRating'
+import SearchSuggest, { type SearchCandidate } from './SearchSuggest'
 
 const typeOptions: { value: ItemType; label: string }[] = [
   { value: 'book', label: '本' },
@@ -12,6 +13,11 @@ const typeOptions: { value: ItemType; label: string }[] = [
   { value: 'anime', label: 'アニメ' },
   { value: 'drama', label: 'ドラマ' },
 ]
+
+// 本・漫画はGoogle Books、それ以外はTMDb
+function getSearchEndpoint(type: ItemType): 'books' | 'movies' {
+  return type === 'book' || type === 'manga' ? 'books' : 'movies'
+}
 
 const inputClass =
   'w-full rounded-lg border border-ink/15 bg-white px-3 py-2 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40'
@@ -34,44 +40,102 @@ export default function RegisterModal({
   const [isPending, setIsPending] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [selectedStatus, setSelectedStatus] = useState<ItemStatus>(status)
+  const [selectedType, setSelectedType] = useState<ItemType>('book')
   const [rating, setRating] = useState<number | null>(null)
   const [completedDate, setCompletedDate] = useState(todayString())
   const [review, setReview] = useState('')
   const formRef = useRef<HTMLFormElement>(null)
 
+  // 検索候補
+  const [title, setTitle] = useState('')
+  const [creator, setCreator] = useState('')
+  const [publisher, setPublisher] = useState('')
+  const [thumbnailUrl, setThumbnailUrl] = useState('')
+  const [candidates, setCandidates] = useState<SearchCandidate[]>([])
+  const [searchLoading, setSearchLoading] = useState(false)
+  const [showSuggest, setShowSuggest] = useState(false)
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   function handleOpen() {
     setSelectedStatus(status)
+    setSelectedType('book')
     setRating(null)
     setCompletedDate(todayString())
     setReview('')
+    setTitle('')
+    setCreator('')
+    setPublisher('')
+    setThumbnailUrl('')
+    setCandidates([])
+    setShowSuggest(false)
     setErrorMessage(null)
     setOpen(true)
+  }
+
+  // タイトル入力から300ms後に検索APIを叩く(debounce)
+  const searchCandidates = useCallback(
+    async (query: string, type: ItemType) => {
+      if (query.length < 2) {
+        setCandidates([])
+        setShowSuggest(false)
+        return
+      }
+      setSearchLoading(true)
+      setShowSuggest(true)
+      try {
+        const endpoint = getSearchEndpoint(type)
+        const res = await fetch(
+          `/api/search/${endpoint}?q=${encodeURIComponent(query)}`
+        )
+        const data = await res.json()
+        setCandidates(data.items ?? [])
+      } catch {
+        setCandidates([])
+      } finally {
+        setSearchLoading(false)
+      }
+    },
+    []
+  )
+
+  useEffect(() => {
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current)
+    searchTimerRef.current = setTimeout(() => {
+      searchCandidates(title, selectedType)
+    }, 300)
+    return () => {
+      if (searchTimerRef.current) clearTimeout(searchTimerRef.current)
+    }
+  }, [title, selectedType, searchCandidates])
+
+  // 候補を選択したら各フィールドを自動入力
+  function handleSelect(candidate: SearchCandidate) {
+    setTitle(candidate.title)
+    setCreator(candidate.creator)
+    setPublisher(candidate.publisher)
+    setThumbnailUrl(candidate.thumbnail_url ?? '')
+    setCandidates([])
+    setShowSuggest(false)
   }
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
     setErrorMessage(null)
-    setIsPending(true)
-
-    const formData = new FormData(e.currentTarget)
-    const title = (formData.get('title') as string)?.trim()
-
-    if (!title) {
+    if (!title.trim()) {
       setErrorMessage('タイトルを入力してください')
-      setIsPending(false)
       return
     }
+    setIsPending(true)
 
-    // アイテムを登録
     const { data: newItem, error: itemError } = await supabaseBrowser
       .from('items')
       .insert({
-        type: formData.get('type') as ItemType,
+        type: selectedType,
         status: selectedStatus,
-        title,
-        creator: (formData.get('creator') as string)?.trim() || null,
-        publisher: (formData.get('publisher') as string)?.trim() || null,
-        thumbnail_url: (formData.get('thumbnail_url') as string)?.trim() || null,
+        title: title.trim(),
+        creator: creator.trim() || null,
+        publisher: publisher.trim() || null,
+        thumbnail_url: thumbnailUrl.trim() || null,
         external_source: 'manual',
       })
       .select('id')
@@ -83,7 +147,6 @@ export default function RegisterModal({
       return
     }
 
-    // completedの場合はrecordも同時に作成
     if (selectedStatus === 'completed') {
       const { error: recordError } = await supabaseBrowser.from('records').insert({
         item_id: newItem.id,
@@ -100,7 +163,6 @@ export default function RegisterModal({
     }
 
     setIsPending(false)
-    formRef.current?.reset()
     setOpen(false)
     onSaved()
   }
@@ -129,7 +191,16 @@ export default function RegisterModal({
             <form ref={formRef} onSubmit={handleSubmit} className="space-y-3">
               <div>
                 <label className={labelClass}>種類</label>
-                <select name="type" required className={inputClass} defaultValue="book">
+                <select
+                  value={selectedType}
+                  onChange={(e) => {
+                    setSelectedType(e.target.value as ItemType)
+                    setCandidates([])
+                    setShowSuggest(false)
+                  }}
+                  required
+                  className={inputClass}
+                >
                   {typeOptions.map((opt) => (
                     <option key={opt.value} value={opt.value}>
                       {opt.label}
@@ -141,38 +212,85 @@ export default function RegisterModal({
               <div>
                 <label className={labelClass}>登録先</label>
                 <select
-                  name="status"
-                  required
-                  className={inputClass}
                   value={selectedStatus}
                   onChange={(e) => setSelectedStatus(e.target.value as ItemStatus)}
+                  required
+                  className={inputClass}
                 >
                   <option value="wishlist">未読・未視聴(ウィッシュリスト)</option>
                   <option value="completed">記録済み(読了・視聴済み)</option>
                 </select>
               </div>
 
+              {/* タイトル入力 + 候補リスト */}
               <div>
-                <label className={labelClass}>タイトル *</label>
-                <input name="title" required className={inputClass} />
+                <label className={labelClass}>
+                  タイトル *
+                </label>
+                <input
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  onFocus={() => candidates.length > 0 && setShowSuggest(true)}
+                  onBlur={() => setTimeout(() => setShowSuggest(false), 150)}
+                  required
+                  className={inputClass}
+                  placeholder="タイトルを入力…"
+                  autoComplete="off"
+                />
+                {showSuggest && (
+                  <SearchSuggest
+                    candidates={candidates}
+                    onSelect={handleSelect}
+                    loading={searchLoading}
+                  />
+                )}
               </div>
 
               <div>
                 <label className={labelClass}>作者 / 監督</label>
-                <input name="creator" className={inputClass} />
+                <input
+                  value={creator}
+                  onChange={(e) => setCreator(e.target.value)}
+                  className={inputClass}
+                />
               </div>
 
               <div>
                 <label className={labelClass}>出版社 / 制作会社</label>
-                <input name="publisher" className={inputClass} />
+                <input
+                  value={publisher}
+                  onChange={(e) => setPublisher(e.target.value)}
+                  className={inputClass}
+                />
               </div>
 
               <div>
                 <label className={labelClass}>サムネイルURL</label>
-                <input name="thumbnail_url" placeholder="https://..." className={inputClass} />
+                <input
+                  value={thumbnailUrl}
+                  onChange={(e) => setThumbnailUrl(e.target.value)}
+                  placeholder="https://..."
+                  className={inputClass}
+                />
+                {thumbnailUrl && (
+                  <div className="mt-1.5 flex items-center gap-2">
+                    <img
+                      src={thumbnailUrl}
+                      alt="プレビュー"
+                      className="h-14 w-10 rounded object-cover"
+                      onError={(e) => (e.currentTarget.style.display = 'none')}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setThumbnailUrl('')}
+                      className="text-xs text-ink/40 hover:text-ink"
+                    >
+                      削除
+                    </button>
+                  </div>
+                )}
               </div>
 
-              {/* 記録済みを選択した場合のみ表示 */}
               {selectedStatus === 'completed' && (
                 <>
                   <div className="border-t border-ink/10 pt-3">
